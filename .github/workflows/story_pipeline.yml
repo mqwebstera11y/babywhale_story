@@ -13,6 +13,11 @@ on:
         required: false
         default: ''
         type: string
+      story_length:
+        description: 'Total story length in Chinese characters (e.g. 150, 300, 600). Default: 300.'
+        required: false
+        default: '300'
+        type: string
       fresh_start:
         description: 'Start a brand-new story (ignores last week continuity)'
         required: false
@@ -49,9 +54,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python scripts/generate_story.py \
-            --character "${{ github.event.inputs.character_name }}" \
-            --keywords  "${{ github.event.inputs.keywords }}" \
-            --fresh-start "${{ github.event.inputs.fresh_start }}"
+            --character    "${{ github.event.inputs.character_name }}" \
+            --keywords     "${{ github.event.inputs.keywords }}" \
+            --story-length "${{ github.event.inputs.story_length }}" \
+            --fresh-start  "${{ github.event.inputs.fresh_start }}"
 
       - name: Commit and push generated story
         run: |
