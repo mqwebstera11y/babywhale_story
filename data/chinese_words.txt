@@ -1,0 +1,37 @@
+# Chinese vocabulary list for bedtime story generation
+# ---------------------------------------------------------
+# One word per line. Lines starting with # are ignored.
+# Replace the sample words below with your own vocabulary.
+# The pipeline will randomly sample 15 words each run.
+# ---------------------------------------------------------
+
+小鲸鱼
+大海
+月亮
+星星
+妈妈
+爸爸
+朋友
+快乐
+勇敢
+善良
+帮助
+分享
+梦想
+冒险
+旅行
+家
+温暖
+成长
+美丽
+大树
+小鸟
+彩虹
+下雨
+太阳
+白云
+微笑
+故事
+爱
+希望
+开心
