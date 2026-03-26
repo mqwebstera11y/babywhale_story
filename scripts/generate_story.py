@@ -2,18 +2,20 @@
 """
 Chinese Bedtime Story Generator
 
-Generates a ~300-character Chinese bedtime story (3 paragraphs) using the Claude API.
+Generates a Chinese bedtime story of configurable length using the Claude API.
 Vocabulary is sourced from data/chinese_words.txt.
 Story continuity is tracked in state/story_state.json.
 Output is saved as an HTML file (Arial 15pt) ready for Google Docs import.
 
 Usage:
-    python scripts/generate_story.py [--character NAME] [--keywords KW1,KW2] [--fresh-start true]
+    python scripts/generate_story.py [--character NAME] [--keywords KW1,KW2]
+                                      [--story-length 300] [--fresh-start true]
 """
 
 import argparse
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -27,6 +29,7 @@ ROOT        = Path(__file__).parent.parent
 WORDS_FILE  = ROOT / "data" / "chinese_words.txt"
 STORIES_DIR = ROOT / "stories"
 STATE_FILE  = ROOT / "state" / "story_state.json"
+DEFAULT_LENGTH = 300
 
 STORIES_DIR.mkdir(parents=True, exist_ok=True)
 (ROOT / "state").mkdir(parents=True, exist_ok=True)
@@ -104,9 +107,13 @@ def build_prompt(
     keywords: list[str],
     previous_summary: str | None,
     fresh_start: bool,
+    story_length: int,
 ) -> str:
     """Compose the Claude prompt with strict vocabulary restrictions."""
     full_word_list = "、".join(words)
+
+    # Divide total length evenly across 3 paragraphs
+    para_len = math.ceil(story_length / 3)
 
     character_line = (
         f"主角名字：「{character_name}」（允许直接使用）"
@@ -138,14 +145,14 @@ def build_prompt(
 {character_line}
 {keyword_line}
 来源3——补充词（最多3个）：
-你可自行选择最多3个词汇表以外的词，使故事更流畅。尔后必须在《新增词语》中列出它们。
+你可自行选择最多3个词汇表以外的词，使故事更流畅。但必须在《新增词语》中列出它们。
 
 下列基础虚词和语法词可自由使用，不占用上述配额：
 {GRAMMAR_WORDS}
 
 ═════ 故事要求 ═════
 
-1. 正文分三段（开局→发展→结尾），每段约100字，合计约300字
+1. 正文分三段（开局→发展→结尾），每段约{para_len}字，合计约{story_length}字
 2. 只有一个主角，故事温馨有教育意义，语言简单，适合睡前阅读
 3. 严格遵守上方词汇限制
 {continuation_block}
@@ -155,11 +162,11 @@ def build_prompt(
 （标题）
 
 【故事正文】
-（第一段：开局，约100字）
+（第一段：开局，约{para_len}字）
 
-（第二段：发展，约100字）
+（第二段：发展，约{para_len}字）
 
-（第三段：结尾，约100字）
+（第三段：结尾，约{para_len}字）
 
 【新增词语】
 （列出你额外使用的最多3个词，用逗号分隔。若未增加任何新词请填写“无”）
@@ -197,6 +204,7 @@ def story_to_html(
     character: str,
     keywords: list[str],
     story_number: int,
+    story_length: int,
     prev_file: str | None,
 ) -> str:
     """Render story data as an HTML document styled Arial 15pt for Google Docs."""
@@ -206,10 +214,10 @@ def story_to_html(
         if para.strip()
     )
 
-    keyword_str  = html.escape(", ".join(keywords) if keywords else "无")
-    prev_str     = html.escape(prev_file or "（全新故事）")
-    title_esc    = html.escape(title)
-    char_esc     = html.escape(character)
+    keyword_str   = html.escape(", ".join(keywords) if keywords else "无")
+    prev_str      = html.escape(prev_file or "（全新故事）")
+    title_esc     = html.escape(title)
+    char_esc      = html.escape(character)
     new_words_esc = html.escape(new_words if new_words and new_words != "无" else "无")
 
     return f"""<!DOCTYPE html>
@@ -262,6 +270,7 @@ def story_to_html(
     <tr><td>日期</td><td>{html.escape(today)}</td></tr>
     <tr><td>主角</td><td>{char_esc}</td></tr>
     <tr><td>关键词</td><td>{keyword_str}</td></tr>
+    <tr><td>故事长度</td><td>约 {story_length} 字</td></tr>
     <tr><td>故事编号</td><td>第 {story_number} 期</td></tr>
     <tr><td>续集自</td><td>{prev_str}</td></tr>
     <tr><td>新增词语</td><td>{new_words_esc}</td></tr>
@@ -275,7 +284,12 @@ def story_to_html(
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
-def generate_story(character_name: str, keywords: list[str], fresh_start: bool) -> None:
+def generate_story(
+    character_name: str,
+    keywords: list[str],
+    story_length: int,
+    fresh_start: bool,
+) -> None:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         print("ERROR: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
@@ -295,10 +309,11 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
 
     story_number = state["story_count"] + 1
     print(f"Generating story #{story_number}")
-    print(f"  Character : {resolved_character}")
-    print(f"  Keywords  : {keywords or '(none)'}")
-    print(f"  Vocabulary: {len(words)} words loaded from {WORDS_FILE.name}")
-    print(f"  Fresh start: {fresh_start}")
+    print(f"  Character   : {resolved_character}")
+    print(f"  Keywords    : {keywords or '(none)'}")
+    print(f"  Story length: ~{story_length} characters")
+    print(f"  Vocabulary  : {len(words)} words loaded from {WORDS_FILE.name}")
+    print(f"  Fresh start : {fresh_start}")
     print(f"  Continuing from: {state.get('last_story_summary', '(none)') or '(none)'}")
 
     prompt = build_prompt(
@@ -307,11 +322,15 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
         keywords=keywords,
         previous_summary=state.get("last_story_summary"),
         fresh_start=fresh_start,
+        story_length=story_length,
     )
+
+    # Reserve enough tokens: roughly 2 Chinese chars per token + overhead
+    max_tokens = max(1024, story_length * 2 + 512)
 
     message = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=2048,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
     response_text = message.content[0].text
@@ -328,6 +347,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
         character=resolved_character,
         keywords=keywords,
         story_number=story_number,
+        story_length=story_length,
         prev_file=state.get("last_story_file"),
     )
     filename.write_text(story_html, encoding="utf-8")
@@ -358,6 +378,8 @@ def main() -> None:
         help="Main character name (e.g. 小明). Persisted across weeks if set.")
     parser.add_argument("--keywords", default="",
         help="Comma-separated story theme keywords (e.g. '旅行,节日').")
+    parser.add_argument("--story-length", default=str(DEFAULT_LENGTH),
+        help=f"Total story length in Chinese characters (default: {DEFAULT_LENGTH}).")
     parser.add_argument("--fresh-start", default="false",
         help="Pass 'true' to ignore previous story and start fresh.")
     args = parser.parse_args()
@@ -365,9 +387,18 @@ def main() -> None:
     keywords    = [k.strip() for k in args.keywords.split(",") if k.strip()]
     fresh_start = str(args.fresh_start).lower() in ("true", "1", "yes")
 
+    try:
+        story_length = int(args.story_length)
+        if story_length < 30:
+            raise ValueError
+    except ValueError:
+        print(f"ERROR: --story-length must be a positive integer >= 30. Got: {args.story_length!r}", file=sys.stderr)
+        sys.exit(1)
+
     generate_story(
         character_name=args.character.strip(),
         keywords=keywords,
+        story_length=story_length,
         fresh_start=fresh_start,
     )
 
