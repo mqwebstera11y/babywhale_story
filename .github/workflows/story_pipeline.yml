@@ -1,0 +1,66 @@
+name: Chinese Bedtime Story Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      character_name:
+        description: 'Main character name (e.g. 小明). Leave blank to reuse saved name.'
+        required: false
+        default: ''
+        type: string
+      keywords:
+        description: 'Story theme keywords, comma-separated (e.g. 旅行,节日). Leave blank for no theme.'
+        required: false
+        default: ''
+        type: string
+      fresh_start:
+        description: 'Start a brand-new story (ignores last week continuity)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  generate-story:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Generate Chinese bedtime story
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python scripts/generate_story.py \
+            --character "${{ github.event.inputs.character_name }}" \
+            --keywords  "${{ github.event.inputs.keywords }}" \
+            --fresh-start "${{ github.event.inputs.fresh_start }}"
+
+      - name: Commit and push generated story
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stories/ state/
+          if git diff --staged --quiet; then
+            echo "No new story files to commit."
+          else
+            git commit -m "story: Chinese bedtime story $(date +%Y-%m-%d)"
+            git push origin dev
+          fi
