@@ -1,0 +1,98 @@
+name: Chinese Bedtime Story Pipeline
+
+on:
+  schedule:
+    # Runs every workday at 6 PM EST (UTC-5) = 23:00 UTC
+    # Note: During EDT (UTC-4, Mar–Nov), this fires at 7 PM Eastern.
+    # Adjust to '0 22 * * 1-5' during daylight saving time if needed.
+    - cron: '0 23 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      character_name:
+        description: 'Main character name (e.g. 小明). Leave blank to use saved name.'
+        required: false
+        default: ''
+        type: string
+      keywords:
+        description: 'Story theme keywords, comma-separated (e.g. 旅行,节日). Leave blank for no theme.'
+        required: false
+        default: ''
+        type: string
+      fresh_start:
+        description: 'Start a brand-new story (ignores last week continuity)'
+        required: false
+        default: false
+        type: boolean
+      force_generate:
+        description: 'Force story generation today (overrides weekly Monday schedule)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  generate-story:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Check if story generation is scheduled for today
+        id: check_schedule
+        run: |
+          # Stories are generated weekly on Mondays via schedule.
+          # workflow_dispatch always generates (unless force_generate=false).
+          DAY=$(date +%u)  # 1=Monday ... 7=Sunday
+          FORCE_FLAG="${{ github.event.inputs.force_generate }}"
+          EVENT="${{ github.event_name }}"
+
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$FORCE_FLAG" != "false" ]; then
+            echo "generate=true" >> $GITHUB_OUTPUT
+            echo "Manual trigger: story will be generated."
+          elif [ "$EVENT" = "schedule" ] && [ "$DAY" = "1" ]; then
+            echo "generate=true" >> $GITHUB_OUTPUT
+            echo "Monday schedule: story will be generated."
+          else
+            echo "generate=false" >> $GITHUB_OUTPUT
+            echo "Not a generation day (stories run on Mondays). Skipping story generation."
+          fi
+
+      - name: Generate Chinese bedtime story
+        if: steps.check_schedule.outputs.generate == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python scripts/generate_story.py \
+            --character "${{ github.event.inputs.character_name }}" \
+            --keywords  "${{ github.event.inputs.keywords }}" \
+            --fresh-start "${{ github.event.inputs.fresh_start }}"
+
+      - name: Commit and push generated story
+        if: steps.check_schedule.outputs.generate == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stories/ state/
+          if git diff --staged --quiet; then
+            echo "No new story files to commit."
+          else
+            git commit -m "story: weekly Chinese bedtime story $(date +%Y-%m-%d)"
+            git push origin dev
+          fi
