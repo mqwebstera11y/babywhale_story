@@ -16,14 +16,13 @@ import html
 import json
 import os
 import re
-import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
 
-# ── Paths ───────────────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT        = Path(__file__).parent.parent
 WORDS_FILE  = ROOT / "data" / "chinese_words.txt"
 STORIES_DIR = ROOT / "stories"
@@ -31,6 +30,15 @@ STATE_FILE  = ROOT / "state" / "story_state.json"
 
 STORIES_DIR.mkdir(parents=True, exist_ok=True)
 (ROOT / "state").mkdir(parents=True, exist_ok=True)
+
+# Basic Chinese function/grammar words that are always permitted and do not
+# count against the vocabulary restriction.
+GRAMMAR_WORDS = (
+    "的、地、得、了、着、过、是、在、有、和、也、就、都、还、很、不、没、这、那、一"
+    "、他、她、她、它、上、下、里、来、去、说、看、想、走、跑、飞、叫、笑、哭"
+    "、大、小、多、少、好、坟、新、旧、长、短、高、低、把、被、对、向、从、用、让、就"
+    "、才、又、只、最、非常、可以、要、会、能、于是、然后、因为、所以、虽然、但是、如果、就是"
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,39 +105,54 @@ def build_prompt(
     previous_summary: str | None,
     fresh_start: bool,
 ) -> str:
-    """Compose the Claude prompt for story generation."""
-    word_sample = random.sample(words, min(15, len(words)))
-    word_list   = "、".join(word_sample)
+    """Compose the Claude prompt with strict vocabulary restrictions."""
+    full_word_list = "、".join(words)
 
     character_line = (
-        f"故事的主角名字叫：{character_name}"
+        f"主角名字：「{character_name}」（允许直接使用）"
         if character_name
-        else "请为故事创造一个可爱的主角"
+        else "请从词汇表中选一个词作为主角名字"
     )
 
-    keyword_block = ""
+    keyword_line = ""
     if keywords:
-        keyword_block = f"故事主题关键词（请围绕以下主题展开）：{'、'.join(keywords)}\n"
+        keyword_line = f"主题关键词：「{'、'.join(keywords)}」（允许直接使用）\n"
 
     continuation_block = ""
     if previous_summary and not fresh_start:
         continuation_block = (
-            f"这个故事是上周故事的续集，请自然地衔接上周的情节。\n"
-            f"上周故事摘要：\n{previous_summary}\n"
+            f"本故事是上周故事的续集，请自然衔接上周情节。\n"
+            f"上周摘要：{previous_summary}\n"
         )
 
-    return f"""请为3-6岁小朋友创作一个中文睡前故事，严格遵守以下要求：
+    return f"""任务：为3-6岁小朋友创作一个中文睡前故事。
 
-1. 故事长度：正文分三段，每段约100个汉字，合计约300个汉字
-2. {character_line}
-3. 只有一个主角，故事温馨、有教育意义，语言简单易懂，适合睡前阅读
-4. 三段正文要有起承转合，构成完整的故事弧度（开局→发展→结尾）
-5. 请在故事正文中自然地使用下列词语中的至少5个：{word_list}
-{keyword_block}{continuation_block}
-请严格按照以下格式输出，不要添加其他内容：
+═════ 《词汇限制——必须严格执行》 ═════
+
+故事正文中的所有内容词（名词、动词、形容词、副词）必须且只能来自以下三个来源：
+
+来源1——词汇表（共{len(words)}个词）：
+{full_word_list}
+
+来源2——固定允许词：
+{character_line}
+{keyword_line}
+来源3——补充词（最多3个）：
+你可自行选择最多3个词汇表以外的词，使故事更流畅。尔后必须在《新增词语》中列出它们。
+
+下列基础虚词和语法词可自由使用，不占用上述配额：
+{GRAMMAR_WORDS}
+
+═════ 故事要求 ═════
+
+1. 正文分三段（开局→发展→结尾），每段约100字，合计约300字
+2. 只有一个主角，故事温馨有教育意义，语言简单，适合睡前阅读
+3. 严格遵守上方词汇限制
+{continuation_block}
+═════ 输出格式（不得添加其他内容） ═════
 
 【故事标题】
-（标题写在这里）
+（标题）
 
 【故事正文】
 （第一段：开局，约100字）
@@ -138,31 +161,38 @@ def build_prompt(
 
 （第三段：结尾，约100字）
 
+【新增词语】
+（列出你额外使用的最多3个词，用逗号分隔。若未增加任何新词请填写“无”）
+
 【故事摘要】
-（用2-3句话概括本周故事情节，供下周续写参考）
+（用2-3句概括本周情节，供下周续写参考）
 """
 
 
-def parse_response(text: str) -> tuple[str, str, str]:
-    """Extract title, story body, and summary from Claude's response."""
-    title = story = summary = ""
+def parse_response(text: str) -> tuple[str, str, str, str]:
+    """Extract title, story body, new words, and summary from Claude's response."""
+    title = story = new_words = summary = ""
     for section in text.split("【"):
         if section.startswith("故事标题】"):
-            title   = section[len("故事标题】"):].strip()
+            title     = section[len("故事标题】"):].strip()
         elif section.startswith("故事正文】"):
-            story   = section[len("故事正文】"):].strip()
+            story     = section[len("故事正文】"):].strip()
+        elif section.startswith("新增词语】"):
+            new_words = section[len("新增词语】"):].strip()
         elif section.startswith("故事摘要】"):
-            summary = section[len("故事摘要】"):].strip()
+            summary   = section[len("故事摘要】"):].strip()
     if not story:
-        story   = text.strip()
-        title   = "睡前故事"
-        summary = story[:80]
-    return title, story, summary
+        story     = text.strip()
+        title     = "睡前故事"
+        new_words = ""
+        summary   = story[:80]
+    return title, story, new_words, summary
 
 
 def story_to_html(
     title: str,
     story: str,
+    new_words: str,
     today: str,
     character: str,
     keywords: list[str],
@@ -170,17 +200,17 @@ def story_to_html(
     prev_file: str | None,
 ) -> str:
     """Render story data as an HTML document styled Arial 15pt for Google Docs."""
-    # Split story into paragraphs on blank lines; skip empty chunks
     paragraphs_html = "\n".join(
-        f"<p>{html.escape(para.strip())}</p>"
+        f"  <p>{html.escape(para.strip())}</p>"
         for para in re.split(r"\n{2,}", story)
         if para.strip()
     )
 
-    keyword_str = html.escape(", ".join(keywords) if keywords else "无")
-    prev_str    = html.escape(prev_file or "（全新故事）")
-    title_esc   = html.escape(title)
-    char_esc    = html.escape(character)
+    keyword_str  = html.escape(", ".join(keywords) if keywords else "无")
+    prev_str     = html.escape(prev_file or "（全新故事）")
+    title_esc    = html.escape(title)
+    char_esc     = html.escape(character)
+    new_words_esc = html.escape(new_words if new_words and new_words != "无" else "无")
 
     return f"""<!DOCTYPE html>
 <html lang="zh">
@@ -234,6 +264,7 @@ def story_to_html(
     <tr><td>关键词</td><td>{keyword_str}</td></tr>
     <tr><td>故事编号</td><td>第 {story_number} 期</td></tr>
     <tr><td>续集自</td><td>{prev_str}</td></tr>
+    <tr><td>新增词语</td><td>{new_words_esc}</td></tr>
   </table>
   <hr>
 {paragraphs_html}
@@ -266,6 +297,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     print(f"Generating story #{story_number}")
     print(f"  Character : {resolved_character}")
     print(f"  Keywords  : {keywords or '(none)'}")
+    print(f"  Vocabulary: {len(words)} words loaded from {WORDS_FILE.name}")
     print(f"  Fresh start: {fresh_start}")
     print(f"  Continuing from: {state.get('last_story_summary', '(none)') or '(none)'}")
 
@@ -283,7 +315,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
         messages=[{"role": "user", "content": prompt}],
     )
     response_text = message.content[0].text
-    title, story, summary = parse_response(response_text)
+    title, story, new_words, summary = parse_response(response_text)
 
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     filename = unique_filename(story_number, today)
@@ -291,6 +323,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     story_html = story_to_html(
         title=title,
         story=story,
+        new_words=new_words,
         today=today,
         character=resolved_character,
         keywords=keywords,
@@ -304,6 +337,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     print(f"{'='*50}")
     print(story)
     print(f"{'='*50}")
+    print(f"新增词语: {new_words or '无'}")
     print(f"摘要: {summary}")
     print(f"{'='*50}")
     print(f"\nStory saved to: {filename}")
