@@ -5,12 +5,14 @@ Chinese Bedtime Story Generator
 Generates a ~300-character Chinese bedtime story (3 paragraphs) using the Claude API.
 Vocabulary is sourced from data/chinese_words.txt.
 Story continuity is tracked in state/story_state.json.
+Output is saved as an HTML file (Arial 15pt) ready for Google Docs import.
 
 Usage:
     python scripts/generate_story.py [--character NAME] [--keywords KW1,KW2] [--fresh-start true]
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -46,13 +48,9 @@ def load_chinese_words() -> list[str]:
         )
 
     raw = WORDS_FILE.read_text(encoding="utf-8")
-
-    # Drop comment lines before splitting so a '#' comment doesn't become a token
     no_comments = "\n".join(
         line for line in raw.splitlines() if not line.strip().startswith("#")
     )
-
-    # Split on any mix of whitespace (space, tab, newline) and commas
     words = [w for w in re.split(r"[\s,]+", no_comments) if w]
 
     if not words:
@@ -79,15 +77,15 @@ def save_state(state: dict) -> None:
 
 
 def unique_filename(story_number: int, today: str) -> Path:
-    """Return a filename that does not already exist.
+    """Return an .html filename that does not already exist.
 
-    If story_NNN_YYYY-MM-DD.md is taken (e.g. two runs on the same day),
+    If story_NNN_YYYY-MM-DD.html is taken (two runs on the same day),
     append _2, _3, ... until a free slot is found.
     """
-    candidate = STORIES_DIR / f"story_{story_number:03d}_{today}.md"
+    candidate = STORIES_DIR / f"story_{story_number:03d}_{today}.html"
     counter = 2
     while candidate.exists():
-        candidate = STORIES_DIR / f"story_{story_number:03d}_{today}_{counter}.md"
+        candidate = STORIES_DIR / f"story_{story_number:03d}_{today}_{counter}.html"
         counter += 1
     return candidate
 
@@ -162,6 +160,88 @@ def parse_response(text: str) -> tuple[str, str, str]:
     return title, story, summary
 
 
+def story_to_html(
+    title: str,
+    story: str,
+    today: str,
+    character: str,
+    keywords: list[str],
+    story_number: int,
+    prev_file: str | None,
+) -> str:
+    """Render story data as an HTML document styled Arial 15pt for Google Docs."""
+    # Split story into paragraphs on blank lines; skip empty chunks
+    paragraphs_html = "\n".join(
+        f"<p>{html.escape(para.strip())}</p>"
+        for para in re.split(r"\n{2,}", story)
+        if para.strip()
+    )
+
+    keyword_str = html.escape(", ".join(keywords) if keywords else "无")
+    prev_str    = html.escape(prev_file or "（全新故事）")
+    title_esc   = html.escape(title)
+    char_esc    = html.escape(character)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>{title_esc}</title>
+  <style>
+    body {{
+      font-family: Arial, sans-serif;
+      font-size: 15pt;
+      max-width: 820px;
+      margin: 48px auto;
+      line-height: 2;
+      color: #111;
+    }}
+    h1 {{
+      font-family: Arial, sans-serif;
+      font-size: 18pt;
+      margin-bottom: 16px;
+    }}
+    table {{
+      border-collapse: collapse;
+      margin-bottom: 28px;
+      font-size: 12pt;
+    }}
+    td, th {{
+      border: 1px solid #ccc;
+      padding: 5px 14px;
+      text-align: left;
+    }}
+    th {{
+      background-color: #f2f2f2;
+    }}
+    hr {{
+      border: none;
+      border-top: 1px solid #ddd;
+      margin: 28px 0;
+    }}
+    p {{
+      margin: 0 0 1.2em 0;
+      text-indent: 2em;
+    }}
+  </style>
+</head>
+<body>
+  <h1>{title_esc}</h1>
+  <table>
+    <tr><th>字段</th><th>内容</th></tr>
+    <tr><td>日期</td><td>{html.escape(today)}</td></tr>
+    <tr><td>主角</td><td>{char_esc}</td></tr>
+    <tr><td>关键词</td><td>{keyword_str}</td></tr>
+    <tr><td>故事编号</td><td>第 {story_number} 期</td></tr>
+    <tr><td>续集自</td><td>{prev_str}</td></tr>
+  </table>
+  <hr>
+{paragraphs_html}
+</body>
+</html>
+"""
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def generate_story(character_name: str, keywords: list[str], fresh_start: bool) -> None:
@@ -179,7 +259,6 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
         state["story_count"]        = 0
         print("Fresh start: previous story continuity cleared.")
 
-    # Character name resolution: CLI arg → saved state → default
     resolved_character = character_name or state.get("character_name") or "小鲸鱼"
     state["character_name"] = resolved_character
 
@@ -206,25 +285,19 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     response_text = message.content[0].text
     title, story, summary = parse_response(response_text)
 
-    # ── Save story file ────────────────────────────────────────────────────────
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     filename = unique_filename(story_number, today)
 
-    story_md = f"""# {title}
-
-| 字段 | 内容 |
-|------|------|
-| 日期 | {today} |
-| 主角 | {resolved_character} |
-| 关键词 | {', '.join(keywords) if keywords else '无'} |
-| 故事编号 | 第 {story_number} 期 |
-| 续集自 | {state.get('last_story_file') or '（全新故事）'} |
-
----
-
-{story}
-"""
-    filename.write_text(story_md, encoding="utf-8")
+    story_html = story_to_html(
+        title=title,
+        story=story,
+        today=today,
+        character=resolved_character,
+        keywords=keywords,
+        story_number=story_number,
+        prev_file=state.get("last_story_file"),
+    )
+    filename.write_text(story_html, encoding="utf-8")
 
     print(f"\n{'='*50}")
     print(f"标题: {title}")
@@ -235,7 +308,6 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     print(f"{'='*50}")
     print(f"\nStory saved to: {filename}")
 
-    # ── Update state ───────────────────────────────────────────────────────────
     state["story_count"]        = story_number
     state["last_story_date"]    = today
     state["last_story_summary"] = summary
@@ -248,21 +320,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Chinese Bedtime Story Generator — powered by Claude API"
     )
-    parser.add_argument(
-        "--character",
-        default="",
-        help="Main character name (e.g. 小明). Persisted across weeks if set.",
-    )
-    parser.add_argument(
-        "--keywords",
-        default="",
-        help="Comma-separated story theme keywords (e.g. '旅行,节日').",
-    )
-    parser.add_argument(
-        "--fresh-start",
-        default="false",
-        help="Pass 'true' to ignore previous story and start fresh.",
-    )
+    parser.add_argument("--character", default="",
+        help="Main character name (e.g. 小明). Persisted across weeks if set.")
+    parser.add_argument("--keywords", default="",
+        help="Comma-separated story theme keywords (e.g. '旅行,节日').")
+    parser.add_argument("--fresh-start", default="false",
+        help="Pass 'true' to ignore previous story and start fresh.")
     args = parser.parse_args()
 
     keywords    = [k.strip() for k in args.keywords.split(",") if k.strip()]
