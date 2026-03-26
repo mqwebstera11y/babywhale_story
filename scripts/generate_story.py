@@ -2,7 +2,7 @@
 """
 Chinese Bedtime Story Generator
 
-Generates a ~100-character Chinese bedtime story using the Claude API.
+Generates a ~300-character Chinese bedtime story (3 paragraphs) using the Claude API.
 Vocabulary is sourced from data/chinese_words.txt.
 Story continuity is tracked in state/story_state.json.
 
@@ -78,6 +78,20 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def unique_filename(story_number: int, today: str) -> Path:
+    """Return a filename that does not already exist.
+
+    If story_NNN_YYYY-MM-DD.md is taken (e.g. two runs on the same day),
+    append _2, _3, ... until a free slot is found.
+    """
+    candidate = STORIES_DIR / f"story_{story_number:03d}_{today}.md"
+    counter = 2
+    while candidate.exists():
+        candidate = STORIES_DIR / f"story_{story_number:03d}_{today}_{counter}.md"
+        counter += 1
+    return candidate
+
+
 def build_prompt(
     words: list[str],
     character_name: str,
@@ -108,10 +122,11 @@ def build_prompt(
 
     return f"""请为3-6岁小朋友创作一个中文睡前故事，严格遵守以下要求：
 
-1. 故事长度：恰好约100个汉字（正文部分）
+1. 故事长度：正文分三段，每段约100个汉字，合计约300个汉字
 2. {character_line}
 3. 只有一个主角，故事温馨、有教育意义，语言简单易懂，适合睡前阅读
-4. 请在故事正文中自然地使用下列词语中的至少5个：{word_list}
+4. 三段正文要有起承转合，构成完整的故事弧度（开局→发展→结尾）
+5. 请在故事正文中自然地使用下列词语中的至少5个：{word_list}
 {keyword_block}{continuation_block}
 请严格按照以下格式输出，不要添加其他内容：
 
@@ -119,7 +134,11 @@ def build_prompt(
 （标题写在这里）
 
 【故事正文】
-（约100字的故事写在这里）
+（第一段：开局，约100字）
+
+（第二段：发展，约100字）
+
+（第三段：结尾，约100字）
 
 【故事摘要】
 （用2-3句话概括本周故事情节，供下周续写参考）
@@ -181,7 +200,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
 
     message = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
     response_text = message.content[0].text
@@ -189,7 +208,7 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
 
     # ── Save story file ────────────────────────────────────────────────────────
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    filename = STORIES_DIR / f"story_{story_number:03d}_{today}.md"
+    filename = unique_filename(story_number, today)
 
     story_md = f"""# {title}
 
@@ -204,10 +223,6 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
 ---
 
 {story}
-
----
-
-*本故事由 AI 自动生成，词汇来自中文学习词汇表。*
 """
     filename.write_text(story_md, encoding="utf-8")
 
