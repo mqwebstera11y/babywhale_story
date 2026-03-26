@@ -2,7 +2,7 @@
 """
 Chinese Bedtime Story Generator
 
-Generates a weekly ~100-character Chinese bedtime story using the Claude API.
+Generates a ~100-character Chinese bedtime story using the Claude API.
 Vocabulary is sourced from data/chinese_words.txt.
 Story continuity is tracked in state/story_state.json.
 
@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import random
 import sys
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from pathlib import Path
 
 import anthropic
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# ── Paths ───────────────────────────────────────────────────────────────────
 ROOT        = Path(__file__).parent.parent
 WORDS_FILE  = ROOT / "data" / "chinese_words.txt"
 STORIES_DIR = ROOT / "stories"
@@ -33,17 +34,27 @@ STORIES_DIR.mkdir(parents=True, exist_ok=True)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_chinese_words() -> list[str]:
-    """Load Chinese vocabulary from words file, skipping blank lines and comments."""
+    """Load Chinese vocabulary from words file.
+
+    Words may be separated by any combination of newlines, spaces, and commas.
+    Lines that begin with # (after stripping) are treated as comments and ignored.
+    """
     if not WORDS_FILE.exists():
         raise FileNotFoundError(
             f"Words file not found: {WORDS_FILE}\n"
             "Please add your Chinese vocabulary to data/chinese_words.txt"
         )
-    words = [
-        line.strip()
-        for line in WORDS_FILE.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+
+    raw = WORDS_FILE.read_text(encoding="utf-8")
+
+    # Drop comment lines before splitting so a '#' comment doesn't become a token
+    no_comments = "\n".join(
+        line for line in raw.splitlines() if not line.strip().startswith("#")
+    )
+
+    # Split on any mix of whitespace (space, tab, newline) and commas
+    words = [w for w in re.split(r"[\s,]+", no_comments) if w]
+
     if not words:
         raise ValueError("data/chinese_words.txt is empty. Please add Chinese words.")
     return words
@@ -75,8 +86,8 @@ def build_prompt(
     fresh_start: bool,
 ) -> str:
     """Compose the Claude prompt for story generation."""
-    word_sample  = random.sample(words, min(15, len(words)))
-    word_list    = "、".join(word_sample)
+    word_sample = random.sample(words, min(15, len(words)))
+    word_list   = "、".join(word_sample)
 
     character_line = (
         f"故事的主角名字叫：{character_name}"
@@ -126,7 +137,6 @@ def parse_response(text: str) -> tuple[str, str, str]:
         elif section.startswith("故事摘要】"):
             summary = section[len("故事摘要】"):].strip()
     if not story:
-        # Graceful fallback: treat full response as the story
         story   = text.strip()
         title   = "睡前故事"
         summary = story[:80]
@@ -211,10 +221,10 @@ def generate_story(character_name: str, keywords: list[str], fresh_start: bool) 
     print(f"\nStory saved to: {filename}")
 
     # ── Update state ───────────────────────────────────────────────────────────
-    state["story_count"]       = story_number
-    state["last_story_date"]   = today
+    state["story_count"]        = story_number
+    state["last_story_date"]    = today
     state["last_story_summary"] = summary
-    state["last_story_file"]   = filename.name
+    state["last_story_file"]    = filename.name
     save_state(state)
     print("State updated. Next week's story will continue from this one.")
 
