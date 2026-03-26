@@ -32,7 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: main
           fetch-depth: 0
 
       - name: Set up Python
@@ -62,5 +62,5 @@ jobs:
             echo "No new story files to commit."
           else
             git commit -m "story: Chinese bedtime story $(date +%Y-%m-%d)"
-            git push origin dev
+            git push origin main
           fi
